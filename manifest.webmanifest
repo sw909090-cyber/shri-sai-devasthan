@@ -1,0 +1,15 @@
+{
+  "name": "Shri Sai Devasthan, Chikalgud",
+  "short_name": "Sai Devasthan",
+  "description": "A devotional, mobile-first experience for Shri Sai Devasthan, Chikalgud.",
+  "start_url": "/shri-sai-devasthan/",
+  "display": "standalone",
+  "background_color": "#351006",
+  "theme_color": "#3a160b",
+  "orientation": "portrait-primary",
+  "lang": "en-IN",
+  "categories": [
+    "lifestyle",
+    "religion"
+  ]
+}

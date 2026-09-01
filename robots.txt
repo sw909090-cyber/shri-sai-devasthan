@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://sw909090-cyber.github.io/shri-sai-devasthan/sitemap.xml
