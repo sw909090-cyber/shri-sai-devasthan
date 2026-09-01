@@ -480,101 +480,7 @@ if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.s
 <div><h3>Quick Links</h3><a href="#about">About</a><a href="#darshan">Darshan &amp; Aarti</a><a href="#purnima">Purnima</a><a href="#gallery">Gallery</a><a href="#visit">Contact</a></div>
 <div><h3>Support</h3><a href="#donate">Temple Development</a><a href="#seva">Annadanam &amp; Seva</a><a href="#visit">Visit the Temple</a></div>
 </div><div class="copy">© 2026 Shri Sai Devasthan, Chikalgud • Client approval preview • 2026</div></footer>
-<script>
-/* Mobile-safe multilingual translation. Uses the public Google translation endpoint
-   directly, so it does not depend on the hidden desktop Google Translate widget. */
-(function(){
-  const picker=document.querySelector('.languagePicker');
-  const select=document.getElementById('languageSelect');
-  if(!select) return;
-  const supported={en:'en',hi:'hi',kn:'kn',mr:'mr',te:'te',ta:'ta',ml:'ml',bn:'bn',gu:'gu',pa:'pa',or:'or'};
-  const root=document.documentElement;
-  const cacheKey='saiTempleTranslationsV2';
-  let cache={};
-  try{ cache=JSON.parse(localStorage.getItem(cacheKey)||'{}')||{}; }catch(e){}
-  let requested='en';
-  try{ requested=localStorage.getItem('saiTempleLanguage')||'en'; }catch(e){}
-  if(!supported[requested]) requested='en';
-  select.value=requested;
 
-  // Save the original English text once. Text nodes are used so existing markup,
-  // buttons, links, icons and gallery cards are never destroyed by translation.
-  const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,{
-    acceptNode(node){
-      const p=node.parentElement;
-      if(!p || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
-      if(p.closest('.languagePicker,script,style,noscript,svg,[data-no-translate]')) return NodeFilter.FILTER_REJECT;
-      if(node._saiOriginal===undefined) node._saiOriginal=node.nodeValue;
-      return NodeFilter.FILTER_ACCEPT;
-    }
-  });
-  const textNodes=[];
-  while(walker.nextNode()) textNodes.push(walker.currentNode);
-
-  function setBusy(on,msg){
-    if(!picker) return;
-    picker.classList.toggle('is-busy',on);
-    let status=picker.querySelector('.languageStatus');
-    if(!status){status=document.createElement('div');status.className='languageStatus';picker.appendChild(status);}
-    status.textContent=msg||'';
-    select.disabled=on;
-  }
-
-  async function translateOne(text,lang){
-    const clean=text.trim();
-    if(!clean || lang==='en') return text;
-    const key=lang+'::'+clean;
-    if(cache[key]) return text.replace(clean,cache[key]);
-    const url='https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl='+encodeURIComponent(lang)+'&dt=t&q='+encodeURIComponent(clean);
-    const res=await fetch(url,{method:'GET',cache:'no-store'});
-    if(!res.ok) throw new Error('Translation request failed');
-    const data=await res.json();
-    const translated=(data && data[0]) ? data[0].map(x=>x[0]||'').join('') : '';
-    if(!translated) throw new Error('Empty translation');
-    cache[key]=translated;
-    return text.replace(clean,translated);
-  }
-
-  async function restoreEnglish(){
-    textNodes.forEach(n=>{ if(n._saiOriginal!==undefined) n.nodeValue=n._saiOriginal; });
-    root.lang='en';
-  }
-
-  async function applyLanguage(lang){
-    if(!supported[lang]) lang='en';
-    setBusy(true,lang==='en'?'Switching to English…':'Translating…');
-    try{
-      if(lang==='en'){
-        await restoreEnglish();
-      }else{
-        // Restore first so changing Kannada -> Telugu never translates an already
-        // translated string into the next language.
-        await restoreEnglish();
-        let done=0;
-        const nodes=textNodes.filter(n=>n.nodeValue.trim().length>0);
-        // Small concurrent batches work reliably on mobile networks.
-        for(let i=0;i<nodes.length;i+=4){
-          const batch=nodes.slice(i,i+4);
-          await Promise.all(batch.map(async n=>{
-            try{n.nodeValue=await translateOne(n.nodeValue,lang);}catch(e){/* retain English if one request fails */}
-            done++;
-            setBusy(true,'Translating '+done+' / '+nodes.length+'…');
-          }));
-        }
-      }
-      root.lang=lang;
-      try{localStorage.setItem('saiTempleLanguage',lang);localStorage.setItem(cacheKey,JSON.stringify(cache));}catch(e){}
-    }finally{
-      setBusy(false,'');
-    }
-  }
-
-  select.addEventListener('change',function(){ applyLanguage(this.value); });
-  // Expose a tiny retry helper for mobile browsers if the network is temporarily unavailable.
-  window.saiApplyLanguage=applyLanguage;
-  if(requested!=='en') setTimeout(()=>applyLanguage(requested),180);
-})();
-</script>
 <script>
 const slides=[...document.querySelectorAll('.heroSlide')],dots=document.getElementById('dots');let current=0,timer;
 slides.forEach((_,i)=>{const b=document.createElement('button');b.className='dot'+(i===0?' active':'');b.setAttribute('aria-label','Go to slide '+(i+1));b.onclick=()=>go(i);dots.appendChild(b)});
@@ -597,155 +503,134 @@ document.querySelectorAll('.heroSlide img').forEach(function(img){
 });
 </script>
 
+
 <script>
-(() => {
+/* Shri Sai Devasthan — unified multilingual controller.
+   One language selector on desktop + one on the PWA/mobile overlay.
+   Translates all body text nodes from the original English, so the page does
+   not stop after translating only the menu/headings. */
+(function(){
+  const selects=[document.getElementById('languageSelect'),document.getElementById('pwaLang')].filter(Boolean);
+  if(!selects.length) return;
+  const supported={en:'en',hi:'hi',kn:'kn',mr:'mr',te:'te',ta:'ta',ml:'ml',bn:'bn',gu:'gu',pa:'pa',or:'or'};
+  const root=document.documentElement;
+  const cacheKey='saiTempleTranslationsV3';
+  let cache={};
+  try{cache=JSON.parse(localStorage.getItem(cacheKey)||'{}')||{};}catch(e){}
+
+  const originals=new Map();
+  const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,{
+    acceptNode(node){
+      const p=node.parentElement;
+      if(!p || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+      if(p.closest('.languagePicker,.pwa-language,script,style,noscript,svg,[data-no-translate]')) return NodeFilter.FILTER_REJECT;
+      originals.set(node,node.nodeValue);
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+  const nodes=[];
+  while(walker.nextNode()) nodes.push(walker.currentNode);
+
+  const titleMap={
+    hi:'श्री साईं देवस्थान — चिकलगुड',kn:'ಶ್ರೀ ಸಾಯಿ ದೇವಸ್ಥಾನ — ಚಿಕಲ್ಗುಡ್',mr:'श्री साई देवस्थान — चिकलगुड',
+    te:'శ్రీ సాయి దేవస్థానం — చికల్గుడ్',ta:'ஸ்ரீ சாய் தேவஸ்தானம் — சிகல்குட்',ml:'ശ്രീ സായി ദേവസ്ഥാനം — ചികൽഗുഡ്',
+    bn:'শ্রী সাই দেবস্থান — চিকালগুড',gu:'શ્રી સાઈ દેવસ્થાન — ચિકલગુડ',pa:'ਸ਼੍ਰੀ ਸਾਈ ਦੇਵਸਥਾਨ — ਚਿਕਲਗੁਡ',or:'ଶ୍ରୀ ସାଇ ଦେବସ୍ଥାନ — ଚିକଲଗୁଡ'
+  };
+
+  function syncSelects(lang){selects.forEach(s=>{s.value=lang;});}
+  function setBusy(on,msg){
+    const picker=document.querySelector('.languagePicker');
+    if(!picker) return;
+    picker.classList.toggle('is-busy',on);
+    let status=picker.querySelector('.languageStatus');
+    if(!status){status=document.createElement('div');status.className='languageStatus';picker.appendChild(status);}
+    status.textContent=msg||'';
+    selects.forEach(s=>s.disabled=on);
+  }
+  function restore(){originals.forEach((v,n)=>n.nodeValue=v);}
+
+  async function translateText(text,lang){
+    const clean=text.trim();
+    if(!clean || lang==='en') return text;
+    const key=lang+'::'+clean;
+    if(cache[key]) return text.replace(clean,cache[key]);
+    const url='https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl='+encodeURIComponent(lang)+'&dt=t&q='+encodeURIComponent(clean);
+    let lastErr;
+    for(let attempt=0;attempt<2;attempt++){
+      try{
+        const res=await fetch(url,{method:'GET',cache:'no-store'});
+        if(!res.ok) throw new Error('Translation request failed');
+        const data=await res.json();
+        const translated=(data&&data[0])?data[0].map(x=>x[0]||'').join(''):'';
+        if(!translated) throw new Error('Empty translation');
+        cache[key]=translated;
+        return text.replace(clean,translated);
+      }catch(e){lastErr=e; await new Promise(r=>setTimeout(r,250));}
+    }
+    throw lastErr||new Error('Translation failed');
+  }
+
+  async function applyLanguage(lang){
+    if(!supported[lang]) lang='en';
+    syncSelects(lang);
+    setBusy(true,lang==='en'?'Switching to English…':'Translating the complete page…');
+    restore();
+    if(lang==='en'){
+      root.lang='en';
+      document.title='Shri Sai Devasthan — Chikalgud';
+      setBusy(false,'');
+      try{localStorage.setItem('saiTempleLanguage','en');localStorage.setItem('saiLang','en');}catch(e){}
+      return;
+    }
+
+    // Translate each unique English string once, then apply it to every matching node.
+    const unique=[...new Set(nodes.map(n=>n.nodeValue).filter(v=>v.trim()))];
+    const translated=new Map();
+    let done=0;
+    for(let i=0;i<unique.length;i+=5){
+      const batch=unique.slice(i,i+5);
+      await Promise.all(batch.map(async text=>{
+        try{translated.set(text,await translateText(text,lang));}
+        catch(e){translated.set(text,text);} // keep English rather than breaking the page
+        done++;
+        setBusy(true,'Translating '+done+' / '+unique.length+'…');
+      }));
+    }
+    nodes.forEach(n=>{const v=translated.get(n.nodeValue);if(v) n.nodeValue=v;});
+    root.lang=lang;
+    document.title=titleMap[lang]||'Shri Sai Devasthan';
+    try{
+      localStorage.setItem('saiTempleLanguage',lang);
+      localStorage.setItem('saiLang',lang);
+      localStorage.setItem(cacheKey,JSON.stringify(cache));
+    }catch(e){}
+    setBusy(false,'');
+  }
+
+  let saved='en';
+  try{saved=localStorage.getItem('saiTempleLanguage')||localStorage.getItem('saiLang')||'en';}catch(e){}
+  if(!supported[saved]) saved='en';
+  syncSelects(saved);
+  selects.forEach(s=>s.addEventListener('change',()=>applyLanguage(s.value)));
+  window.saiApplyLanguage=applyLanguage;
+  if(saved!=='en') setTimeout(()=>applyLanguage(saved),250);
+
+  // PWA splash / install prompt (kept from the previous version).
   const splash=document.getElementById('darshanSplash');
   const enter=document.getElementById('enterDarshan');
-  const lang=document.getElementById('pwaLang');
   const installBox=document.getElementById('pwaInstall');
   const installBtn=document.getElementById('pwaInstallBtn');
   let deferredPrompt=null;
-
   enter?.addEventListener('click',()=>splash?.classList.add('hide'));
   setTimeout(()=>splash?.classList.add('hide'),5000);
-
-  // Mobile-safe language control. It does not rely on a desktop-only hidden widget.
-  const dictionary={
-    hi:{
-      'HOME':'होम','ABOUT':'हमारे बारे में','GALLERY':'गैलरी','CONTACT':'संपर्क','DONATION':'दान',
-      'SEVA':'सेवा','ONLINE SERVICES':'ऑनलाइन सेवाएँ','Explore Gallery':'गैलरी देखें',
-      'Support the Temple':'मंदिर का सहयोग करें','Plan Your Visit':'अपनी यात्रा की योजना बनाएं',
-      'Our Temple':'हमारा मंदिर','Temple Gallery':'मंदिर गैलरी','Seva & Gatherings':'सेवा और आयोजन',
-      'Support the Temple':'मंदिर का सहयोग करें','Visit & Contact':'भेंट और संपर्क',
-      'Every Purnima':'हर पूर्णिमा','Satyanarayan Puja':'सत्यनारायण पूजा',
-      'Bhajan & Annadanam':'भजन और अन्नदान','Temple Development':'मंदिर निर्माण',
-      'Donation Contact':'दान संपर्क','Open Temple Location':'मंदिर का स्थान खोलें',
-      'Call for Donation':'दान के लिए कॉल करें','Open location in Google Maps':'Google Maps में स्थान खोलें'
-    },
-    kn:{
-      'HOME':'ಮುಖಪುಟ','ABOUT':'ದೇವಾಲಯದ ಬಗ್ಗೆ','GALLERY':'ಚಿತ್ರಸಂಗ್ರಹ','CONTACT':'ಸಂಪರ್ಕ','DONATION':'ದೇಣಿಗೆ',
-      'SEVA':'ಸೇವೆ','ONLINE SERVICES':'ಆನ್‌ಲೈನ್ ಸೇವೆಗಳು','Explore Gallery':'ಚಿತ್ರಸಂಗ್ರಹ ನೋಡಿ',
-      'Support the Temple':'ದೇವಾಲಯಕ್ಕೆ ಸಹಕರಿಸಿ','Plan Your Visit':'ನಿಮ್ಮ ಭೇಟಿಯನ್ನು ಯೋಜಿಸಿ',
-      'Our Temple':'ನಮ್ಮ ದೇವಾಲಯ','Temple Gallery':'ದೇವಾಲಯದ ಚಿತ್ರಸಂಗ್ರಹ','Seva & Gatherings':'ಸೇವೆ ಮತ್ತು ಕಾರ್ಯಕ್ರಮಗಳು',
-      'Visit & Contact':'ಭೇಟಿ ಮತ್ತು ಸಂಪರ್ಕ','Every Purnima':'ಪ್ರತಿ ಹುಣ್ಣಿಮೆ','Satyanarayan Puja':'ಸತ್ಯನಾರಾಯಣ ಪೂಜೆ',
-      'Bhajan & Annadanam':'ಭಜನೆ ಮತ್ತು ಅನ್ನದಾನ','Temple Development':'ದೇವಾಲಯ ನಿರ್ಮಾಣ',
-      'Donation Contact':'ದೇಣಿಗೆ ಸಂಪರ್ಕ','Open Temple Location':'ದೇವಾಲಯದ ಸ್ಥಳ ತೆರೆಯಿರಿ',
-      'Call for Donation':'ದೇಣಿಗೆಗಾಗಿ ಕರೆ ಮಾಡಿ','Open location in Google Maps':'Google Maps ನಲ್ಲಿ ಸ್ಥಳ ತೆರೆಯಿರಿ'
-    },
-    te:{
-      'HOME':'హోమ్','ABOUT':'మా ఆలయం గురించి','GALLERY':'గ్యాలరీ','CONTACT':'సంప్రదించండి','DONATION':'విరాళం',
-      'SEVA':'సేవ','ONLINE SERVICES':'ఆన్‌లైన్ సేవలు','Explore Gallery':'గ్యాలరీ చూడండి',
-      'Support the Temple':'ఆలయానికి సహకరించండి','Plan Your Visit':'మీ సందర్శనను ప్లాన్ చేయండి',
-      'Our Temple':'మా ఆలయం','Temple Gallery':'ఆలయ గ్యాలరీ','Seva & Gatherings':'సేవ & కార్యక్రమాలు',
-      'Visit & Contact':'సందర్శన & సంప్రదింపు','Every Purnima':'ప్రతి పౌర్ణమి','Satyanarayan Puja':'సత్యనారాయణ పూజ',
-      'Bhajan & Annadanam':'భజన & అన్నదానం','Temple Development':'ఆలయ నిర్మాణం',
-      'Donation Contact':'విరాళం కోసం సంప్రదించండి','Open Temple Location':'ఆలయ స్థానాన్ని తెరవండి',
-      'Call for Donation':'విరాళం కోసం కాల్ చేయండి','Open location in Google Maps':'Google Mapsలో స్థానం తెరవండి'
-    },
-    mr:{
-      'HOME':'मुखपृष्ठ','ABOUT':'मंदिराबद्दल','GALLERY':'गॅलरी','CONTACT':'संपर्क','DONATION':'देणगी',
-      'SEVA':'सेवा','ONLINE SERVICES':'ऑनलाइन सेवा','Explore Gallery':'गॅलरी पहा',
-      'Support the Temple':'मंदिराला सहकार्य करा','Plan Your Visit':'आपली भेट नियोजित करा',
-      'Our Temple':'आमचे मंदिर','Temple Gallery':'मंदिर गॅलरी','Seva & Gatherings':'सेवा व कार्यक्रम',
-      'Visit & Contact':'भेट व संपर्क','Every Purnima':'दर पौर्णिमेला','Satyanarayan Puja':'सत्यनारायण पूजा',
-      'Bhajan & Annadanam':'भजन व अन्नदान','Temple Development':'मंदिर बांधकाम',
-      'Donation Contact':'देणगी संपर्क','Open Temple Location':'मंदिराचे स्थान उघडा',
-      'Call for Donation':'देणगीसाठी कॉल करा','Open location in Google Maps':'Google Maps मध्ये स्थान उघडा'
-    },
-    ta:{
-      'HOME':'முகப்பு','ABOUT':'எங்களைப் பற்றி','GALLERY':'படத்தொகுப்பு','CONTACT':'தொடர்பு','DONATION':'நன்கொடை',
-      'SEVA':'சேவை','ONLINE SERVICES':'ஆன்லைன் சேவைகள்','Explore Gallery':'படத்தொகுப்பைப் பார்க்க',
-      'Support the Temple':'கோவிலுக்கு ஆதரவு அளிக்கவும்','Plan Your Visit':'உங்கள் வருகையை திட்டமிடுங்கள்',
-      'Our Temple':'எங்கள் கோவில்','Temple Gallery':'கோவில் படத்தொகுப்பு','Seva & Gatherings':'சேவை & நிகழ்வுகள்',
-      'Visit & Contact':'வருகை & தொடர்பு','Every Purnima':'ஒவ்வொரு பௌர்ணமியும்','Satyanarayan Puja':'சத்யநாராயண பூஜை',
-      'Bhajan & Annadanam':'பஜன் & அன்னதானம்','Temple Development':'கோவில் கட்டுமானம்',
-      'Donation Contact':'நன்கொடை தொடர்பு','Open Temple Location':'கோவில் இருப்பிடத்தைத் திறக்கவும்',
-      'Call for Donation':'நன்கொடைக்காக அழைக்கவும்','Open location in Google Maps':'Google Maps-ல் இருப்பிடத்தைத் திறக்கவும்'
-    },
-    ml:{
-      'HOME':'ഹോം','ABOUT':'ക്ഷേത്രത്തെക്കുറിച്ച്','GALLERY':'ഗാലറി','CONTACT':'ബന്ധപ്പെടുക','DONATION':'സംഭാവന',
-      'SEVA':'സേവ','ONLINE SERVICES':'ഓൺലൈൻ സേവനങ്ങൾ','Explore Gallery':'ഗാലറി കാണുക',
-      'Support the Temple':'ക്ഷേത്രത്തെ പിന്തുണയ്ക്കുക','Plan Your Visit':'നിങ്ങളുടെ സന്ദർശനം ആസൂത്രണം ചെയ്യുക',
-      'Our Temple':'ഞങ്ങളുടെ ക്ഷേത്രം','Temple Gallery':'ക്ഷേത്ര ഗാലറി','Seva & Gatherings':'സേവ & പരിപാടികൾ',
-      'Visit & Contact':'സന്ദർശനം & ബന്ധപ്പെടുക','Every Purnima':'എല്ലാ പൗർണമിയിലും','Satyanarayan Puja':'സത്യനാരായണ പൂജ',
-      'Bhajan & Annadanam':'ഭജൻ & അന്നദാനം','Temple Development':'ക്ഷേത്ര നിർമ്മാണം',
-      'Donation Contact':'സംഭാവന ബന്ധപ്പെടുക','Open Temple Location':'ക്ഷേത്ര സ്ഥലം തുറക്കുക',
-      'Call for Donation':'സംഭാവനയ്ക്കായി വിളിക്കുക','Open location in Google Maps':'Google Maps-ൽ സ്ഥലം തുറക്കുക'
-    },
-    bn:{
-      'HOME':'হোম','ABOUT':'আমাদের মন্দির','GALLERY':'গ্যালারি','CONTACT':'যোগাযোগ','DONATION':'দান',
-      'SEVA':'সেবা','ONLINE SERVICES':'অনলাইন সেবা','Explore Gallery':'গ্যালারি দেখুন',
-      'Support the Temple':'মন্দিরকে সহায়তা করুন','Plan Your Visit':'আপনার ভ্রমণ পরিকল্পনা করুন',
-      'Our Temple':'আমাদের মন্দির','Temple Gallery':'মন্দির গ্যালারি','Seva & Gatherings':'সেবা ও অনুষ্ঠান',
-      'Visit & Contact':'দর্শন ও যোগাযোগ','Every Purnima':'প্রতি পূর্ণিমায়','Satyanarayan Puja':'সত্যনারায়ণ পূজা',
-      'Bhajan & Annadanam':'ভজন ও অন্নদান','Temple Development':'মন্দির নির্মাণ',
-      'Donation Contact':'দান যোগাযোগ','Open Temple Location':'মন্দিরের অবস্থান খুলুন',
-      'Call for Donation':'দানের জন্য কল করুন','Open location in Google Maps':'Google Maps-এ অবস্থান খুলুন'
-    },
-    gu:{
-      'HOME':'હોમ','ABOUT':'અમારા મંદિર વિશે','GALLERY':'ગેલેરી','CONTACT':'સંપર્ક','DONATION':'દાન',
-      'SEVA':'સેવા','ONLINE SERVICES':'ઓનલાઇન સેવાઓ','Explore Gallery':'ગેલેરી જુઓ',
-      'Support the Temple':'મંદિરને સહયોગ આપો','Plan Your Visit':'તમારી મુલાકાતનું આયોજન કરો',
-      'Our Temple':'અમારું મંદિર','Temple Gallery':'મંદિર ગેલેરી','Seva & Gatherings':'સેવા અને કાર્યક્રમો',
-      'Visit & Contact':'મુલાકાત અને સંપર્ક','Every Purnima':'દર પૂર્ણિમાએ','Satyanarayan Puja':'સત્યનારાયણ પૂજા',
-      'Bhajan & Annadanam':'ભજન અને અન્નદાન','Temple Development':'મંદિર નિર્માણ',
-      'Donation Contact':'દાન સંપર્ક','Open Temple Location':'મંદિરનું સ્થાન ખોલો',
-      'Call for Donation':'દાન માટે કૉલ કરો','Open location in Google Maps':'Google Maps માં સ્થાન ખોલો'
-    },
-    pa:{
-      'HOME':'ਮੁੱਖ ਪੰਨਾ','ABOUT':'ਸਾਡੇ ਮੰਦਰ ਬਾਰੇ','GALLERY':'ਗੈਲਰੀ','CONTACT':'ਸੰਪਰਕ','DONATION':'ਦਾਨ',
-      'SEVA':'ਸੇਵਾ','ONLINE SERVICES':'ਆਨਲਾਈਨ ਸੇਵਾਵਾਂ','Explore Gallery':'ਗੈਲਰੀ ਵੇਖੋ',
-      'Support the Temple':'ਮੰਦਰ ਦੀ ਸਹਾਇਤਾ ਕਰੋ','Plan Your Visit':'ਆਪਣੀ ਯਾਤਰਾ ਦੀ ਯੋਜਨਾ ਬਣਾਓ',
-      'Our Temple':'ਸਾਡਾ ਮੰਦਰ','Temple Gallery':'ਮੰਦਰ ਗੈਲਰੀ','Seva & Gatherings':'ਸੇਵਾ ਅਤੇ ਸਮਾਗਮ',
-      'Visit & Contact':'ਮੁਲਾਕਾਤ ਅਤੇ ਸੰਪਰਕ','Every Purnima':'ਹਰ ਪੂਰਨਿਮਾ','Satyanarayan Puja':'ਸਤਿਆਨਾਰਾਇਣ ਪੂਜਾ',
-      'Bhajan & Annadanam':'ਭਜਨ ਅਤੇ ਅੰਨਦਾਨ','Temple Development':'ਮੰਦਰ ਨਿਰਮਾਣ',
-      'Donation Contact':'ਦਾਨ ਸੰਪਰਕ','Open Temple Location':'ਮੰਦਰ ਦਾ ਸਥਾਨ ਖੋਲ੍ਹੋ',
-      'Call for Donation':'ਦਾਨ ਲਈ ਕਾਲ ਕਰੋ','Open location in Google Maps':'Google Maps ਵਿੱਚ ਸਥਾਨ ਖੋਲ੍ਹੋ'
-    },
-    or:{
-      'HOME':'ମୁଖ୍ୟ ପୃଷ୍ଠା','ABOUT':'ଆମ ମନ୍ଦିର ବିଷୟରେ','GALLERY':'ଗ୍ୟାଲେରୀ','CONTACT':'ଯୋଗାଯୋଗ','DONATION':'ଦାନ',
-      'SEVA':'ସେବା','ONLINE SERVICES':'ଅନଲାଇନ ସେବା','Explore Gallery':'ଗ୍ୟାଲେରୀ ଦେଖନ୍ତୁ',
-      'Support the Temple':'ମନ୍ଦିରକୁ ସହଯୋଗ କରନ୍ତୁ','Plan Your Visit':'ଆପଣଙ୍କ ଯାତ୍ରା ଯୋଜନା କରନ୍ତୁ',
-      'Our Temple':'ଆମ ମନ୍ଦିର','Temple Gallery':'ମନ୍ଦିର ଗ୍ୟାଲେରୀ','Seva & Gatherings':'ସେବା ଓ କାର୍ଯ୍ୟକ୍ରମ',
-      'Visit & Contact':'ଦର୍ଶନ ଓ ଯୋଗାଯୋଗ','Every Purnima':'ପ୍ରତି ପୂର୍ଣ୍ଣିମାରେ','Satyanarayan Puja':'ସତ୍ୟନାରାୟଣ ପୂଜା',
-      'Bhajan & Annadanam':'ଭଜନ ଓ ଅନ୍ନଦାନ','Temple Development':'ମନ୍ଦିର ନିର୍ମାଣ',
-      'Donation Contact':'ଦାନ ଯୋଗାଯୋଗ','Open Temple Location':'ମନ୍ଦିର ସ୍ଥାନ ଖୋଲନ୍ତୁ',
-      'Call for Donation':'ଦାନ ପାଇଁ କଲ୍ କରନ୍ତୁ','Open location in Google Maps':'Google Maps ରେ ସ୍ଥାନ ଖୋଲନ୍ତୁ'
-    }
-  };
-
-  const original=new Map();
-  document.querySelectorAll('body *').forEach(el=>{
-    if(el.children.length===0 && el.textContent.trim()) original.set(el,el.textContent);
-  });
-  function translate(langCode){
-    if(langCode==='en'){
-      original.forEach((v,el)=>el.textContent=v);
-      document.documentElement.lang='en'; return;
-    }
-    const d=dictionary[langCode]||{};
-    original.forEach((v,el)=>{
-      const key=v.trim();
-      if(d[key]) el.textContent=d[key];
-    });
-    document.documentElement.lang=langCode;
-  }
-  const saved=localStorage.getItem('saiLang')||'en';
-  lang.value=saved; translate(saved);
-  lang.addEventListener('change',()=>{localStorage.setItem('saiLang',lang.value);translate(lang.value);});
-
-  window.addEventListener('beforeinstallprompt',e=>{
-    e.preventDefault(); deferredPrompt=e; installBox?.classList.add('show');
-  });
+  window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;installBox?.classList.add('show');});
   installBtn?.addEventListener('click',async()=>{
     if(!deferredPrompt)return;
     deferredPrompt.prompt();
     await deferredPrompt.userChoice;
-    deferredPrompt=null; installBox?.classList.remove('show');
+    deferredPrompt=null;installBox?.classList.remove('show');
   });
   window.addEventListener('appinstalled',()=>installBox?.classList.remove('show'));
-
-  // Make mobile quick links close any open nav menus if the base page has one.
   document.querySelectorAll('.pwa-bottom a').forEach(a=>a.addEventListener('click',()=>window.scrollTo({top:document.querySelector(a.getAttribute('href'))?.offsetTop-55||0,behavior:'smooth'})));
 })();
 </script>
